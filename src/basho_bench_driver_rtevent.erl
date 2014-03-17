@@ -54,13 +54,14 @@ request(_, _, S) ->
     {[], S}.
 
 maybe_init_node() ->
-    Node = 'bb@192.168.42.4',
+    Node = basho_bench_config:get(bench_node_name),
+    Cookie = basho_bench_config:get(cookie),
     case node() of
         Node ->
             ok;
         _ ->
-            net_kernel:start([Node]),
-            erlang:set_cookie(node(), 'ejabberd_default')
+            net_kernel:start(Node),
+            erlang:set_cookie(node(), Cookie)
     end.
 
 request_types() ->
