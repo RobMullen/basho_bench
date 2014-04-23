@@ -41,6 +41,7 @@
                  report_interval,
                  errors_since_last_report = false,
                  summary_file,
+                 use_statsd = undefined,
                  errors_file}).
 
 %% ====================================================================
@@ -125,9 +126,17 @@ init([]) ->
     %% Schedule next write/reset of data
     ReportInterval = timer:seconds(basho_bench_config:get(report_interval)),
 
+    UseStatsD = case application:get_env(basho_bench, statsd) of
+                   {ok, {Host, Port}} -> 
+                       {ok, _}  = statsd:start(Host, Port),
+                       true;
+                   _ ->
+                       false
+               end,
     {ok, #state{ ops = Ops ++ Measurements,
                  report_interval = ReportInterval,
                  summary_file = SummaryFile,
+                 use_statsd = UseStatsD,
                  errors_file = ErrorsFile}}.
 
 handle_call(run, _From, State) ->
@@ -249,7 +258,7 @@ process_stats(Now, State) ->
     %% Time to report latency data to our CSV files
     {Oks, Errors, OkOpsRes} =
         lists:foldl(fun(Op, {TotalOks, TotalErrors, OpsResAcc}) ->
-                            {Oks, Errors} = report_latency(Elapsed, Window, Op),
+                            {Oks, Errors} = report_latency(Elapsed, Window, Op, State#state.use_statsd),
                             {TotalOks + Oks, TotalErrors + Errors,
                              [{Op, Oks}|OpsResAcc]}
                     end, {0,0,[]}, State#state.ops),
@@ -283,24 +292,46 @@ process_stats(Now, State) ->
 %% Write latency info for a given op to the appropriate CSV. Returns the
 %% number of successful and failed ops in this window of time.
 %%
-report_latency(Elapsed, Window, Op) ->
+report_latency(Elapsed, Window, Op, UseStatsD) ->
     Stats = folsom_metrics:get_histogram_statistics({latencies, Op}),
     Errors = error_counter(Op),
     Units = folsom_metrics:get_metric_value({units, Op}),
     case proplists:get_value(n, Stats) > 0 of
         true ->
             P = proplists:get_value(percentile, Stats),
+            Min    = proplists:get_value(min, Stats),
+            Mean   = proplists:get_value(arithmetic_mean, Stats),
+            Median = proplists:get_value(median, Stats),
+            Max    = proplists:get_value(max, Stats),
+            P95    = proplists:get_value(95, P),
+            P99    = proplists:get_value(99, P),
+            P999   = proplists:get_value(999, P),
+
+            case UseStatsD of
+                true ->
+                    [ begin
+                          GaugeName = atom_to_list(element(1, Op)) ++ "." ++ atom_to_list(StatName),
+                          statsd:gauge(GaugeName, Val)
+                      end || {StatName, Val} <- [{min,  Min},
+                                                 {mean, Mean},
+                                                 {'95', P95},
+                                                 {'99', P99},
+                                                 {max,  Max}]
+                    ];
+                false ->
+                    ok
+            end,
             Line = io_lib:format("~w, ~w, ~w, ~w, ~.1f, ~w, ~w, ~w, ~w, ~w, ~w\n",
                                  [Elapsed,
                                   Window,
                                   Units,
-                                  proplists:get_value(min, Stats),
-                                  proplists:get_value(arithmetic_mean, Stats),
-                                  proplists:get_value(median, Stats),
-                                  proplists:get_value(95, P),
-                                  proplists:get_value(99, P),
-                                  proplists:get_value(999, P),
-                                  proplists:get_value(max, Stats),
+                                  Min,
+                                  Mean,
+                                  Median,
+                                  P95,
+                                  P99,
+                                  P999,
+                                  Max,
                                   Errors]);
         false ->
             ?WARN("No data for op: ~p\n", [Op]),
