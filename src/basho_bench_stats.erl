@@ -310,7 +310,7 @@ report_latency(Elapsed, Window, Op, UseStatsD) ->
             case UseStatsD of
                 true ->
                     [ begin
-                          GaugeName = atom_to_list("bench.ebench_load_gen." ++ element(1, Op)) ++ "-" ++ atom_to_list(StatName) ++ "-ms",
+                          GaugeName = "bench.ebench_load_gen." ++ atom_to_list(element(1, Op)) ++ "-" ++ atom_to_list(StatName) ++ "-ms",
                           statsd:gauge(GaugeName, Val)
                       end || {StatName, Val} <- [{min,  Min},
                                                  {mean, Mean},
