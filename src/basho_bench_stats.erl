@@ -27,7 +27,8 @@
 -export([start_link/0,
          exponential/1,
          run/0,
-         op_complete/3]).
+         op_complete/3,
+         op_error/1]).
 
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
@@ -66,6 +67,9 @@ op_complete(Op, {ok, Units}, ElapsedUs) ->
     ok;
 op_complete(Op, Result, ElapsedUs) ->
     gen_server:call(?MODULE, {op, Op, Result, ElapsedUs}).
+
+op_error(Op) ->
+    gen_server:call(?MODULE, {op, Op, error, -1}).
 
 %% ====================================================================
 %% gen_server callbacks
@@ -144,6 +148,9 @@ handle_call(run, _From, State) ->
     Now = os:timestamp(),
     timer:send_interval(State#state.report_interval, report),
     {reply, ok, State#state { start_time = Now, last_write_time = Now}};
+handle_call({op, Op, error, _ElapsedUs}, _From, State) ->
+    increment_error_counter(Op),
+    {reply, ok, State#state { errors_since_last_report = true }};
 handle_call({op, Op, {error, Reason}, _ElapsedUs}, _From, State) ->
     increment_error_counter(Op),
     increment_error_counter({Op, Reason}),
@@ -310,13 +317,14 @@ report_latency(Elapsed, Window, Op, UseStatsD) ->
             case UseStatsD of
                 true ->
                     [ begin
-                          GaugeName = "bench.ebench_load_gen." ++ atom_to_list(element(1, Op)) ++ "-" ++ atom_to_list(StatName) ++ "-ms",
-                          statsd:gauge(GaugeName, Val)
-                      end || {StatName, Val} <- [{min,  Min},
-                                                 {mean, Mean},
-                                                 {'95', P95},
-                                                 {'99', P99},
-                                                 {max,  Max}]
+                          Key = "bench.ebench_load_gen." ++ atom_to_list(element(1, Op)) ++ "-" ++ atom_to_list(StatName),
+                          statsd:Type(Key, Val)
+                      end || {Type, StatName, Val} <- [{gauge, 'min-ms',  Min},
+                                                       {gauge, 'mean-ms', Mean},
+                                                       {gauge, '95-ms', P95},
+                                                       {gauge, '99-ms', P99},
+                                                       {gauge, 'max-ms',  Max},
+                                                       {count, 'errors', Errors}]
                     ];
                 false ->
                     ok
